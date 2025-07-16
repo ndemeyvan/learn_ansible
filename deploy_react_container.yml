@@ -1,0 +1,144 @@
+---
+- name: Déployer une app React dans un conteneur Ubuntu avec Nginx + Reverse Proxy
+  hosts: servers_1
+  become: yes
+  vars:
+    react_repo_url: "https://github.com/ndemeyvan/ansible_react.git"
+    container_name: "fexy_container"
+    docker_image_name: "fexy_react_image"
+    default_port: 80
+    fallback_port: 8080
+
+  tasks:
+    - name: Vérifier si Docker est installé
+      command: docker --version
+      register: docker_check
+      ignore_errors: yes
+
+    - name: Installer Docker si nécessaire
+      apt:
+        name: docker.io
+        state: present
+        update_cache: yes
+      when: docker_check.rc != 0
+
+    - name: Vérifier si Nginx est installé
+      command: nginx -v
+      register: nginx_check
+      ignore_errors: yes
+
+    - name: Installer Nginx si nécessaire
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+      when: nginx_check.rc != 0
+
+    - name: Créer un répertoire pour le Dockerfile
+      file:
+        path: /opt/fexy_build
+        state: directory
+        mode: "0755"
+
+    - name: Créer le Dockerfile
+      copy:
+        dest: /opt/fexy_build/Dockerfile
+        content: |
+          FROM ubuntu:22.04
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN apt-get update && \
+              apt-get install -y curl git nginx && \
+              curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+              apt-get install -y nodejs && \
+              npm install -g yarn && \
+              rm -rf /var/lib/apt/lists/*
+          WORKDIR /app
+          RUN git clone {{ react_repo_url }} . && \
+              yarn install && \
+              yarn build
+          RUN rm /etc/nginx/sites-enabled/default
+          COPY nginx.conf /etc/nginx/sites-enabled/default
+          CMD ["nginx", "-g", "daemon off;"]
+
+    - name: Créer le fichier nginx.conf pour le container
+      copy:
+        dest: /opt/fexy_build/nginx.conf
+        content: |
+          server {
+              listen 80;
+              root /app/build;
+              index index.html;
+              location / {
+                  try_files $uri /index.html;
+              }
+          }
+
+    - name: Construire l’image Docker personnalisée
+      community.docker.docker_image:
+        name: "{{ docker_image_name }}"
+        build:
+          path: /opt/fexy_build
+        source: build
+
+    - name: Vérifier si le port 80 est libre
+      shell: ss -tuln | grep ":80 "
+      register: port_check
+      ignore_errors: true
+
+    - name: Déterminer le port d’exposition
+      set_fact:
+        exposed_port: "{{ fallback_port if port_check.rc == 0 else default_port }}"
+
+    - name: Supprimer l'ancien container s'il existe
+      docker_container:
+        name: "{{ container_name }}"
+        state: absent
+        force_kill: true
+
+    - name: Démarrer le container avec le port d’exposition
+      docker_container:
+        name: "{{ container_name }}"
+        image: "{{ docker_image_name }}"
+        state: started
+        restart_policy: always
+        published_ports:
+          - "{{ exposed_port }}:80"
+
+    - name: Créer un fichier de reverse proxy Nginx sur la machine hôte
+      copy:
+        dest: /etc/nginx/sites-available/fexy_proxy.conf
+        content: |
+          server {
+              listen 80 default_server;
+              server_name _;
+              location / {
+                  proxy_pass http://localhost:{{ exposed_port }};
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_cache_bypass $http_upgrade;
+              }
+          }
+
+    - name: Activer le reverse proxy
+      file:
+        src: /etc/nginx/sites-available/fexy_proxy.conf
+        dest: /etc/nginx/sites-enabled/fexy_proxy.conf
+        state: link
+        force: yes
+
+    - name: Supprimer le site par défaut Nginx
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      ignore_errors: yes
+
+    - name: Redémarrer Nginx sur la machine physique
+      service:
+        name: nginx
+        state: restarted
+
+    - name: Afficher le lien d’accès
+      debug:
+        msg: "✅ Accédez au site sur http://<IP>:{{ default_port if port_check.rc != 0 else fallback_port }}"
