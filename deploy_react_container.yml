@@ -1,101 +1,90 @@
 ---
-- name: Déployer une app React dans un conteneur Ubuntu avec Nginx + Reverse Proxy
+- name: Déployer une app React dans un conteneur léger avec Nginx + Reverse Proxy
   hosts: servers_1
   become: yes
   vars:
     react_repo_url: "https://github.com/ndemeyvan/ansible_react.git"
-    container_name: "fexy_container"
-    docker_image_name: "fexy_react_image"
+    container_name: "flexy_push"
+    docker_image_name: "flexy_push"
     default_port: 80
     fallback_port: 8080
+    build_dir: "/opt/fexy_build"
 
   tasks:
-    - name: Vérifier si Docker est installé
-      command: docker --version
-      register: docker_check
-      ignore_errors: yes
-
     - name: Installer Docker si nécessaire
       apt:
         name: docker.io
         state: present
         update_cache: yes
-      when: docker_check.rc != 0
-
-    - name: Vérifier si Nginx est installé
-      command: nginx -v
-      register: nginx_check
-      ignore_errors: yes
+      when: ansible_facts.packages['docker.io'] is not defined
 
     - name: Installer Nginx si nécessaire
       apt:
         name: nginx
         state: present
         update_cache: yes
-      when: nginx_check.rc != 0
+      when: ansible_facts.packages['nginx'] is not defined
 
-    - name: Créer un répertoire pour le Dockerfile
+    - name: Créer le dossier de build
       file:
-        path: /opt/fexy_build
+        path: "{{ build_dir }}"
         state: directory
         mode: "0755"
 
-    - name: Créer le Dockerfile
+    - name: Créer le Dockerfile multi-stage ultra léger
       copy:
-        dest: /opt/fexy_build/Dockerfile
+        dest: "{{ build_dir }}/Dockerfile"
         content: |
-          FROM ubuntu:22.04
-          ENV DEBIAN_FRONTEND=noninteractive
-          RUN apt-get update && \
-              apt-get install -y curl git nginx && \
-              curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-              apt-get install -y nodejs && \
-              npm install -g yarn && \
-              rm -rf /var/lib/apt/lists/*
+          # Build Stage
+          FROM node:18-alpine as builder
           WORKDIR /app
-          RUN git clone {{ react_repo_url }} . && \
-              yarn install && \
-              yarn build
-          RUN rm /etc/nginx/sites-enabled/default
-          COPY nginx.conf /etc/nginx/sites-enabled/default
+          RUN apk add --no-cache git
+          RUN git clone {{ react_repo_url }} .
+          RUN yarn install && yarn build
+
+          # Serve Stage
+          FROM nginx:alpine
+          COPY --from=builder /app/build /usr/share/nginx/html
+          COPY nginx.conf /etc/nginx/conf.d/default.conf
+          EXPOSE 80
           CMD ["nginx", "-g", "daemon off;"]
 
-    - name: Créer le fichier nginx.conf pour le container
+    - name: Créer le fichier nginx.conf pour Nginx dans le conteneur
       copy:
-        dest: /opt/fexy_build/nginx.conf
+        dest: "{{ build_dir }}/nginx.conf"
         content: |
           server {
               listen 80;
-              root /app/build;
+              root /usr/share/nginx/html;
               index index.html;
               location / {
                   try_files $uri /index.html;
               }
           }
 
-    - name: Construire l’image Docker personnalisée
+    - name: Construire l’image Docker
       community.docker.docker_image:
         name: "{{ docker_image_name }}"
         build:
-          path: /opt/fexy_build
+          path: "{{ build_dir }}"
         source: build
 
-    - name: Vérifier si le port 80 est libre
+    - name: Vérifier si le port 80 est utilisé
       shell: ss -tuln | grep ":80 "
       register: port_check
       ignore_errors: true
 
-    - name: Déterminer le port d’exposition
+    - name: Déterminer le port à exposer
       set_fact:
         exposed_port: "{{ fallback_port if port_check.rc == 0 else default_port }}"
 
-    - name: Supprimer l'ancien container s'il existe
+    - name: Supprimer l’ancien conteneur s’il existe
       docker_container:
         name: "{{ container_name }}"
         state: absent
         force_kill: true
 
-    - name: Démarrer le container avec le port d’exposition
+    - name: Lancer le conteneur Docker
       docker_container:
         name: "{{ container_name }}"
         image: "{{ docker_image_name }}"
@@ -104,7 +93,7 @@
         published_ports:
           - "{{ exposed_port }}:80"
 
-    - name: Créer un fichier de reverse proxy Nginx sur la machine hôte
+    - name: Configurer le reverse proxy Nginx sur la machine hôte
       copy:
         dest: /etc/nginx/sites-available/fexy_proxy.conf
         content: |
@@ -121,7 +110,7 @@
               }
           }
 
-    - name: Activer le reverse proxy
+    - name: Activer la config proxy Nginx
       file:
         src: /etc/nginx/sites-available/fexy_proxy.conf
         dest: /etc/nginx/sites-enabled/fexy_proxy.conf
@@ -132,13 +121,22 @@
       file:
         path: /etc/nginx/sites-enabled/default
         state: absent
-      ignore_errors: yes
+      ignore_errors: true
+
+    - name: Obtenir l’adresse IP locale de la machine hôte
+      shell: hostname -I | awk '{print $1}'
+      register: local_ip
 
     - name: Redémarrer Nginx sur la machine physique
       service:
         name: nginx
         state: restarted
 
+    - name: Obtenir l’adresse IP publique
+      command: curl -s http://checkip.amazonaws.com
+      register: public_ip
+
     - name: Afficher le lien d’accès
       debug:
-        msg: "✅ Accédez au site sur http://<IP>:{{ default_port if port_check.rc != 0 else fallback_port }}"
+        msg: |
+          🌐 Accès local (LAN) :  http://{{ local_ip.stdout | trim }}:{{ exposed_port }}
