@@ -40,6 +40,7 @@
           WORKDIR /app
           RUN apk add --no-cache git
           RUN git clone {{ react_repo_url }} .
+          RUN npm run build
           RUN yarn install && yarn build
 
           # Serve Stage
