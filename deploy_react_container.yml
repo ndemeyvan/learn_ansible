@@ -9,9 +9,9 @@
     build_dir: "/opt/flexy_build"
 
   tasks:
-    - name: Enregistrer l'heure de début
-      set_fact:
-        start_time: "{{ ansible_date_time.epoch | int }}"
+    - name: Enregistrer l'heure de début (epoch)
+      command: date +%s
+      register: start_time_cmd
 
     - name: Installer Docker et Nginx
       apt:
@@ -158,15 +158,32 @@
       command: curl -s http://checkip.amazonaws.com
       register: public_ip
 
-    - name: Enregistrer l'heure de fin
-      set_fact:
-        end_time: "{{ ansible_date_time.epoch | int }}"
+    - name: Enregistrer l'heure de fin (epoch)
+      command: date +%s
+      register: end_time_cmd
 
-    - name: Calculer la durée d’exécution
+    - name: DEBUG start time
+      debug:
+        msg: "Start time: {{ start_time_cmd.stdout }}"
+
+    - name: DEBUG end time
+      debug:
+        msg: "End time: {{ end_time_cmd.stdout }}"
+
+    - name: Vérifier que l'heure de début et fin sont valides
+      fail:
+        msg: "Les horodatages sont invalides. Impossible de calculer la durée."
+      when: start_time_cmd.stdout | length == 0 or end_time_cmd.stdout | length == 0
+
+    - name: Calculer la durée brute (en secondes)
       set_fact:
-        duration_seconds: "{{ end_time | int - start_time | int }}"
-        duration_minutes: "{{ (end_time | int - start_time | int) // 60 }}"
-        duration_remaining_seconds: "{{ (end_time | int - start_time | int) % 60 }}"
+        duration_seconds: "{{ end_time_cmd.stdout | int - start_time_cmd.stdout | int }}"
+
+    - name: Calculer la durée en minutes et secondes
+      set_fact:
+        duration_minutes: "{{ duration_seconds | int // 60 }}"
+        duration_remaining_seconds: "{{ duration_seconds | int % 60 }}"
+
 
     - name: Afficher les infos de fin
       debug:
