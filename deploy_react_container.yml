@@ -1,5 +1,5 @@
 ---
-- name: Déployer une app React avec Docker + Nginx + Reverse Proxy multi-ports
+- name: Déployer une app nodejs avec Docker + Nginx + Reverse Proxy multi-ports
   hosts: all  # Le filtrage se fera dynamiquement avec `-l`
   become: yes
 
@@ -7,10 +7,10 @@
     - name: Vérifier que les variables obligatoires sont définies
       assert:
         that:
-          - react_repo_url is defined
+          - repo_url is defined
           - container_name is defined
           - docker_image_name is defined
-        fail_msg: "❌ Les variables react_repo_url, container_name et docker_image_name sont requises."
+        fail_msg: "❌ Les variables repo_url, container_name et docker_image_name sont requises."
 
     - name: Définir le dossier de build à partir du nom du conteneur
       set_fact:
@@ -42,7 +42,7 @@
           FROM node:18-alpine as builder
           WORKDIR /app
           RUN apk add --no-cache git
-          RUN git clone {{ react_repo_url }} .
+          RUN git clone {{ repo_url }} .
           RUN rm -rf build
           RUN yarn install && yarn build
 
