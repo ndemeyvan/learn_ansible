@@ -1,5 +1,5 @@
 [servers_1]
-ubuntu1 ansible_host=192.168.1.163 ansible_user=ubuntu1
+ubuntu1 ansible_host=192.168.1.114 ansible_user=ubuntu1
 
 [servers_2]
 ubuntu2 ansible_host=192.168.1.212 ansible_user=ubuntu2

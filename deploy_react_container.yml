@@ -4,8 +4,8 @@
   become: yes
   vars:
     react_repo_url: "https://github.com/ndemeyvan/ansible_react.git"
-    container_name: "flexy_push_2"
-    docker_image_name: "flexy_push_2"
+    container_name: "flexy_push_3"
+    docker_image_name: "flexy_push_3"
     build_dir: "/opt/flexy_build"
 
   tasks:
@@ -45,7 +45,7 @@
           EXPOSE 80
           CMD ["nginx", "-g", "daemon off;"]
 
-    - name: Créer fichier nginx.conf pour le container (serveur interne)
+    - name: Créer fichier nginx.conf pour le container (serveur interne dans le conteneur)
       copy:
         dest: "{{ build_dir }}/nginx.conf"
         content: |
@@ -118,7 +118,7 @@
         published_ports:
           - "{{ exposed_port }}:80"
 
-    - name: Configurer le reverse proxy Nginx pour ce projet sur le port {{ exposed_port }}
+    - name: Configurer le reverse proxy Nginx pour ce projet sur le port {{ exposed_port }} dans la machine hote
       block:
         - name: Copier la config proxy spécifique au projet
           copy:
