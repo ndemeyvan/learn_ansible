@@ -1,14 +1,21 @@
 ---
 - name: Déployer une app React avec Docker + Nginx + Reverse Proxy multi-ports
-  hosts: servers_1
+  hosts: all  # Le filtrage se fera dynamiquement avec `-l`
   become: yes
-  vars:
-    react_repo_url: "https://github.com/ndemeyvan/ansible_react.git"
-    container_name: "flexy_push_5"
-    docker_image_name: "flexy_push_5"
-    build_dir: "/opt/flexy_build"
 
   tasks:
+    - name: Vérifier que les variables obligatoires sont définies
+      assert:
+        that:
+          - react_repo_url is defined
+          - container_name is defined
+          - docker_image_name is defined
+        fail_msg: "❌ Les variables react_repo_url, container_name et docker_image_name sont requises."
+
+    - name: Définir le dossier de build à partir du nom du conteneur
+      set_fact:
+        build_dir: "/opt/{{ container_name }}_build"
+
     - name: Enregistrer l'heure de début (epoch)
       command: date +%s
       register: start_time_cmd
@@ -118,7 +125,7 @@
         published_ports:
           - "{{ exposed_port }}:80"
 
-    - name: Configurer le reverse proxy Nginx pour ce projet sur le port {{ exposed_port }} dans la machine hote
+    - name: Configurer le reverse proxy Nginx pour ce projet sur le port {{ exposed_port }} dans la machine hôte
       block:
         - name: Copier la config proxy spécifique au projet
           copy:
@@ -183,7 +190,6 @@
       set_fact:
         duration_minutes: "{{ duration_seconds | int // 60 }}"
         duration_remaining_seconds: "{{ duration_seconds | int % 60 }}"
-
 
     - name: Afficher les infos de fin
       debug:
