@@ -4,8 +4,8 @@
   become: yes
   vars:
     react_repo_url: "https://github.com/ndemeyvan/ansible_react.git"
-    container_name: "flexy_push_3"
-    docker_image_name: "flexy_push_3"
+    container_name: "flexy_push_5"
+    docker_image_name: "flexy_push_5"
     build_dir: "/opt/flexy_build"
 
   tasks:
