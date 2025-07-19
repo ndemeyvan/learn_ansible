@@ -14,7 +14,7 @@
       prompt: "Nom de l'image Docker"
       private: no
     - name: "app_type"
-      prompt: "Type d'application (react, vue, nestjs, express, nextjs, nuxt, svelte, angular)"
+      prompt: "Type d'application (react, vue, nestjs, express, nextjs,svelte, angular,nuxt,next)"
       private: no
     - name: "node_version"
       prompt: "Version de Node.js (ex: 18-alpine)"
