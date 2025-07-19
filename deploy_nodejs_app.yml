@@ -112,14 +112,18 @@
           CMD ["node", "dist/main.js"]
 
           {% elif app_type in ['express'] %}
-          FROM node:{{ node_version }}
+          FROM node:{{ node_version }} as builder
           WORKDIR /app
           RUN apk add --no-cache git
           RUN git clone --depth=1 {{ repo_url }} .
-          RUN yarn install
-          RUN yarn build || true
+          RUN yarn install --production
+          
+          # Étape finale minimale
+          FROM node:{{ node_version }}
+          WORKDIR /app
+          COPY --from=builder /app /app
           EXPOSE 3000
-          CMD ["node", "dist/index.js"]
+          CMD ["node", "index.js"]
 
           {% else %}
           FROM node:{{ node_version }}
