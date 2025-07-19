@@ -176,4 +176,3 @@
           ✅ Application déployée avec succès !
           🕓 Temps total : {{ duration_minutes }} min {{ duration_remaining_seconds }} s
           🌐 Accès local  : http://{{ local_ip.stdout | trim }}:{{ exposed_port }}
-          🌍 Accès public : http://{{ public_ip.stdout | trim }}:{{ exposed_port }}
