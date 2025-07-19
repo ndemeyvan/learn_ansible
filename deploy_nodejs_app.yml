@@ -1,6 +1,6 @@
 ---
 - name: Déployer une app Node.js avec Docker + Nginx + Reverse Proxy multi-ports
-  hosts: all # Le filtrage se fera dynamiquement avec `-l`
+  hosts: all
   become: yes
 
   vars_prompt:
@@ -17,16 +17,16 @@
       prompt: "Type d'application (react, vue, nestjs, express, nextjs, nuxt, svelte, angular)"
       private: no
     - name: "node_version"
-      prompt: "The version of nodejs of the container default node:18-alpine"
+      prompt: "Version de Node.js (ex: 18-alpine)"
       private: no
 
   tasks:
-    - name: Définir le dossier de build à partir du nom du conteneur
+    - name: Définir le dossier de build
       set_fact:
         build_dir: "/opt/{{ container_name }}_build"
 
     - name: Enregistrer l'heure de début (epoch)
-      command: date +%s
+      shell: date +%s
       register: start_time_cmd
 
     - name: Installer Docker et Nginx
@@ -44,115 +44,32 @@
         state: directory
         mode: "0755"
 
-    - name: Créer Dockerfile dynamique selon app_type
-      copy:
+    - name: Sélectionner le template Dockerfile
+      set_fact:
+        dockerfile_template: "Dockerfile.{{ app_type | lower }}.j2"
+
+    - name: Générer le Dockerfile avec template
+      template:
+        src: "templates/{{ dockerfile_template }}"
         dest: "{{ build_dir }}/Dockerfile"
-        content: |
-          {% if app_type in ['vue'] %}
-          FROM node:{{ node_version }} as builder
-          WORKDIR /app
-          RUN apk add --no-cache git
-          RUN git clone --depth=1 {{ repo_url }} .
-          RUN yarn install
-          RUN yarn build
-
-          FROM nginx:alpine
-          COPY --from=builder /app/dist /usr/share/nginx/html
-          EXPOSE 80
-          CMD ["nginx", "-g", "daemon off;"]
-
-          {% elif app_type in ['react'] %}
-          FROM node:{{ node_version }} as builder
-          WORKDIR /app
-          RUN apk add --no-cache git
-          RUN git clone --depth=1 {{ repo_url }} .
-          RUN yarn install
-          RUN yarn build
-
-          FROM nginx:alpine
-          COPY --from=builder /app/build /usr/share/nginx/html
-          EXPOSE 80
-          CMD ["nginx", "-g", "daemon off;"]
-
-          {% elif app_type in ['angular'] %}
-
-          FROM node:{{ node_version }} as builder
-          # Set working directory
-          WORKDIR /app
-          # Install Git and clone the project
-          RUN apk add --no-cache git
-          RUN git clone --depth=1 {{ repo_url }} .
-          # Install dependencies and Angular CLI
-          RUN yarn install
-          RUN yarn global add @angular/cli
-          # Build the Angular project with correct output path
-          RUN ng build --configuration production --output-path=dist/{{ docker_image_name }}
-
-          # -------------------------
-          # Production stage
-          # -------------------------
-          FROM nginx:alpine
-          # Remove default Nginx static files
-          RUN rm -rf /usr/share/nginx/html/*
-          # Copy Angular files directly to html root (FIXED PATH)
-          COPY --from=builder /app/dist/{{ docker_image_name }}/browser/. /usr/share/nginx/html/
-          # Expose port
-          EXPOSE 80
-          # Run Nginx
-          CMD ["nginx", "-g", "daemon off;"]
-
-          {% elif app_type in ['nestjs'] %}
-          FROM node:{{ node_version }}
-          WORKDIR /app
-          RUN apk add --no-cache git
-          RUN git clone --depth=1 {{ repo_url }} .
-          RUN yarn install
-          RUN yarn build || true
-          EXPOSE 3000
-          CMD ["node", "dist/main.js"]
-
-          {% elif app_type in ['express'] %}
-          FROM node:{{ node_version }} as builder
-          WORKDIR /app
-          RUN apk add --no-cache git
-          RUN git clone --depth=1 {{ repo_url }} .
-          RUN yarn install --production
-          
-          # Étape finale minimale
-          FROM node:{{ node_version }}
-          WORKDIR /app
-          COPY --from=builder /app /app
-          EXPOSE 3000
-          CMD ["node", "index.js"]
-
-          {% else %}
-          FROM node:{{ node_version }}
-          WORKDIR /app
-          RUN apk add --no-cache git
-          RUN git clone --depth=1 {{ repo_url }} .
-          RUN yarn install
-          RUN yarn build || true
-          EXPOSE 3000
-          CMD ["yarn", "start"]
-          {% endif %}
 
     - name: Supprimer conteneur et image Docker existants
       block:
-        - name: Supprimer conteneur Docker s'il existe
+        - name: Supprimer conteneur Docker
           community.docker.docker_container:
             name: "{{ container_name }}"
             state: absent
             force_kill: true
           ignore_errors: true
 
-        - name: Supprimer image Docker s'il existe
+        - name: Supprimer image Docker
           community.docker.docker_image:
             name: "{{ docker_image_name }}"
             state: absent
             force_absent: true
           ignore_errors: true
 
-    - name: Construire l’image Docker sans cache
+    - name: Construire l’image Docker
       community.docker.docker_image:
         name: "{{ docker_image_name }}"
         build:
@@ -161,21 +78,21 @@
           pull: true
         source: build
 
-    - name: Supprimer les images Docker intermédiaires <none> (dangling)
+    - name: Supprimer les images <none> inutiles
       shell: docker images -f "dangling=true" -q | xargs -r docker rmi
       args:
         executable: /bin/bash
 
-    - name: Chercher un port libre à partir de 801
+    - name: Trouver un port libre à partir de 801
       vars:
         start_port: 801
         max_port: 8100
       block:
-        - name: Générer une liste de ports candidats
+        - name: Générer liste de ports candidats
           set_fact:
             candidate_ports: "{{ range(start_port, max_port) | list }}"
 
-        - name: Vérifier les ports un par un et choisir le premier libre
+        - name: Choisir le premier port libre
           shell: |
             for port in {{ candidate_ports | join(' ') }}; do
               ss -tuln | grep ":$port " > /dev/null || { echo $port; break; }
@@ -183,11 +100,11 @@
           register: chosen_port
           changed_when: false
 
-        - name: Enregistrer le port libre trouvé
+        - name: Enregistrer le port libre
           set_fact:
             exposed_port: "{{ chosen_port.stdout | int }}"
 
-    - name: Démarrer le conteneur sur le port libre trouvé
+    - name: Démarrer le conteneur
       community.docker.docker_container:
         name: "{{ container_name }}"
         image: "{{ docker_image_name }}"
@@ -200,7 +117,7 @@
 
     - name: Configurer le reverse proxy Nginx
       block:
-        - name: Copier la config proxy spécifique au projet
+        - name: Créer config proxy Nginx
           copy:
             dest: "/etc/nginx/sites-available/{{ container_name }}_proxy.conf"
             content: |
@@ -218,14 +135,14 @@
                   }
               }
 
-        - name: Activer la config proxy du projet
+        - name: Activer la config proxy
           file:
             src: "/etc/nginx/sites-available/{{ container_name }}_proxy.conf"
             dest: "/etc/nginx/sites-enabled/{{ container_name }}_proxy.conf"
             state: link
             force: yes
 
-    - name: Reload Nginx pour appliquer la nouvelle config
+    - name: Recharger Nginx
       service:
         name: nginx
         state: reloaded
@@ -239,22 +156,24 @@
       register: public_ip
 
     - name: Enregistrer l'heure de fin (epoch)
-      command: date +%s
+      shell: date +%s
       register: end_time_cmd
 
-    - name: Calculer la durée brute (en secondes)
+    - name: Vérifier que les timestamps sont définis
+      fail:
+        msg: "Timestamp start_time_cmd.stdout ou end_time_cmd.stdout manquant"
+      when: start_time_cmd.stdout is not defined or end_time_cmd.stdout is not defined
+
+    - name: Calculer durée (min:sec)
       set_fact:
         duration_seconds: "{{ end_time_cmd.stdout | int - start_time_cmd.stdout | int }}"
+        duration_minutes: "{{ (end_time_cmd.stdout | int - start_time_cmd.stdout | int) // 60 }}"
+        duration_remaining_seconds: "{{ (end_time_cmd.stdout | int - start_time_cmd.stdout | int) % 60 }}"
 
-    - name: Calculer la durée en minutes et secondes
-      set_fact:
-        duration_minutes: "{{ duration_seconds | int // 60 }}"
-        duration_remaining_seconds: "{{ duration_seconds | int % 60 }}"
-
-    - name: Afficher les infos de fin
+    - name: Afficher résultat final
       debug:
         msg: |
           ✅ Application déployée avec succès !
-          🕓 Temps total d'exécution : {{ duration_minutes }} min {{ duration_remaining_seconds }} s
+          🕓 Temps total : {{ duration_minutes }} min {{ duration_remaining_seconds }} s
           🌐 Accès local  : http://{{ local_ip.stdout | trim }}:{{ exposed_port }}
           🌍 Accès public : http://{{ public_ip.stdout | trim }}:{{ exposed_port }}
