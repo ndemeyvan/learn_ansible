@@ -1,17 +1,26 @@
 ---
-- name: Déployer une app nodejs avec Docker + Nginx + Reverse Proxy multi-ports
-  hosts: all  # Le filtrage se fera dynamiquement avec `-l`
+- name: Déployer une app Node.js avec Docker + Nginx + Reverse Proxy multi-ports
+  hosts: all # Le filtrage se fera dynamiquement avec `-l`
   become: yes
 
-  tasks:
-    - name: Vérifier que les variables obligatoires sont définies
-      assert:
-        that:
-          - repo_url is defined
-          - container_name is defined
-          - docker_image_name is defined
-        fail_msg: "❌ Les variables repo_url, container_name et docker_image_name sont requises."
+  vars_prompt:
+    - name: "repo_url"
+      prompt: "URL du dépôt Git"
+      private: no
+    - name: "container_name"
+      prompt: "Nom du conteneur"
+      private: no
+    - name: "docker_image_name"
+      prompt: "Nom de l'image Docker"
+      private: no
+    - name: "app_type"
+      prompt: "Type d'application (react, vue, nestjs, express, nextjs, nuxt, svelte, angular)"
+      private: no
+    - name: "node_version"
+      prompt: "The version of nodejs of the container default node:18-alpine"
+      private: no
 
+  tasks:
     - name: Définir le dossier de build à partir du nom du conteneur
       set_fact:
         build_dir: "/opt/{{ container_name }}_build"
@@ -35,35 +44,93 @@
         state: directory
         mode: "0755"
 
-    - name: Créer Dockerfile multi-stage
+    - name: Créer Dockerfile dynamique selon app_type
       copy:
         dest: "{{ build_dir }}/Dockerfile"
         content: |
-          FROM node:18-alpine as builder
+          {% if app_type in ['vue'] %}
+          FROM node:{{ node_version }} as builder
           WORKDIR /app
           RUN apk add --no-cache git
-          RUN git clone {{ repo_url }} .
-          RUN rm -rf build
-          RUN yarn install && yarn build
+          RUN git clone --depth=1 {{ repo_url }} .
+          RUN yarn install
+          RUN yarn build
 
           FROM nginx:alpine
-          COPY --from=builder /app/build /usr/share/nginx/html
-          COPY nginx.conf /etc/nginx/conf.d/default.conf
+          COPY --from=builder /app/dist /usr/share/nginx/html
           EXPOSE 80
           CMD ["nginx", "-g", "daemon off;"]
 
-    - name: Créer fichier nginx.conf pour le container (serveur interne dans le conteneur)
-      copy:
-        dest: "{{ build_dir }}/nginx.conf"
-        content: |
-          server {
-              listen 80;
-              root /usr/share/nginx/html;
-              index index.html;
-              location / {
-                  try_files $uri /index.html;
-              }
-          }
+          {% elif app_type in ['react'] %}
+          FROM node:{{ node_version }} as builder
+          WORKDIR /app
+          RUN apk add --no-cache git
+          RUN git clone --depth=1 {{ repo_url }} .
+          RUN yarn install
+          RUN yarn build
+
+          FROM nginx:alpine
+          COPY --from=builder /app/build /usr/share/nginx/html
+          EXPOSE 80
+          CMD ["nginx", "-g", "daemon off;"]
+
+          {% elif app_type in ['angular'] %}
+
+          FROM node:{{ node_version }} as builder
+          # Set working directory
+          WORKDIR /app
+          # Install Git and clone the project
+          RUN apk add --no-cache git
+          RUN git clone --depth=1 {{ repo_url }} .
+          # Install dependencies and Angular CLI
+          RUN yarn install
+          RUN yarn global add @angular/cli
+          # Build the Angular project with correct output path
+          RUN ng build --configuration production --output-path=dist/{{ docker_image_name }}
+
+          # -------------------------
+          # Production stage
+          # -------------------------
+          FROM nginx:alpine
+          # Remove default Nginx static files
+          RUN rm -rf /usr/share/nginx/html/*
+          # Copy Angular files directly to html root (FIXED PATH)
+          COPY --from=builder /app/dist/{{ docker_image_name }}/browser/. /usr/share/nginx/html/
+          # Expose port
+          EXPOSE 80
+          # Run Nginx
+          CMD ["nginx", "-g", "daemon off;"]
+
+          {% elif app_type in ['nestjs'] %}
+          FROM node:{{ node_version }}
+          WORKDIR /app
+          RUN apk add --no-cache git
+          RUN git clone --depth=1 {{ repo_url }} .
+          RUN yarn install
+          RUN yarn build || true
+          EXPOSE 3000
+          CMD ["node", "dist/main.js"]
+
+          {% elif app_type in ['express'] %}
+          FROM node:{{ node_version }}
+          WORKDIR /app
+          RUN apk add --no-cache git
+          RUN git clone --depth=1 {{ repo_url }} .
+          RUN yarn install
+          RUN yarn build || true
+          EXPOSE 3000
+          CMD ["node", "dist/index.js"]
+
+          {% else %}
+          FROM node:{{ node_version }}
+          WORKDIR /app
+          RUN apk add --no-cache git
+          RUN git clone --depth=1 {{ repo_url }} .
+          RUN yarn install
+          RUN yarn build || true
+          EXPOSE 3000
+          CMD ["yarn", "start"]
+          {% endif %}
 
     - name: Supprimer conteneur et image Docker existants
       block:
@@ -116,16 +183,18 @@
           set_fact:
             exposed_port: "{{ chosen_port.stdout | int }}"
 
-    - name: Démarrer le conteneur React sur le port libre trouvé
+    - name: Démarrer le conteneur sur le port libre trouvé
       community.docker.docker_container:
         name: "{{ container_name }}"
         image: "{{ docker_image_name }}"
         state: started
         restart_policy: always
         published_ports:
-          - "{{ exposed_port }}:80"
+          - "{{ exposed_port }}:{% if app_type in ['react', 'vue', 'angular', 'svelte'] %}80{% else %}3000{% endif %}"
+        env:
+          NODE_ENV: production
 
-    - name: Configurer le reverse proxy Nginx pour ce projet sur le port {{ exposed_port }} dans la machine hôte
+    - name: Configurer le reverse proxy Nginx
       block:
         - name: Copier la config proxy spécifique au projet
           copy:
@@ -169,19 +238,6 @@
       command: date +%s
       register: end_time_cmd
 
-    - name: DEBUG start time
-      debug:
-        msg: "Start time: {{ start_time_cmd.stdout }}"
-
-    - name: DEBUG end time
-      debug:
-        msg: "End time: {{ end_time_cmd.stdout }}"
-
-    - name: Vérifier que l'heure de début et fin sont valides
-      fail:
-        msg: "Les horodatages sont invalides. Impossible de calculer la durée."
-      when: start_time_cmd.stdout | length == 0 or end_time_cmd.stdout | length == 0
-
     - name: Calculer la durée brute (en secondes)
       set_fact:
         duration_seconds: "{{ end_time_cmd.stdout | int - start_time_cmd.stdout | int }}"
@@ -197,3 +253,4 @@
           ✅ Application déployée avec succès !
           🕓 Temps total d'exécution : {{ duration_minutes }} min {{ duration_remaining_seconds }} s
           🌐 Accès local  : http://{{ local_ip.stdout | trim }}:{{ exposed_port }}
+          🌍 Accès public : http://{{ public_ip.stdout | trim }}:{{ exposed_port }}
