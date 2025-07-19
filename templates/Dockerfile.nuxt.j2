@@ -1,7 +1,6 @@
 FROM node:{{ node_version }} as builder
 
 WORKDIR /app
-
 # Installer Git et cloner le dépôt
 RUN apk add --no-cache git
 RUN git clone --depth=1 {{ repo_url }} .
