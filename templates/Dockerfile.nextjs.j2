@@ -1,0 +1,30 @@
+FROM node:{{ node_version | default("20-alpine") }} AS builder
+
+WORKDIR /app
+
+RUN apk add --no-cache git
+RUN git clone --depth=1 {{ repo_url }} .
+
+RUN yarn install --frozen-lockfile
+RUN yarn build
+
+# Étape 2 : Image de production minimale
+FROM node:{{ node_version | default("20-alpine") }} AS runner
+
+ENV NODE_ENV=production
+WORKDIR /app
+
+# Cette ligne provoquait une erreur si le fichier n’existe pas :
+# COPY --from=builder /app/next.config.js ./
+
+# Remplacée ou supprimée selon ton projet
+# COPY --from=builder /app/nuxt.config.* ./  # pour Nuxt
+# (ou rien du tout pour Next.js si pas nécessaire)
+
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+EXPOSE 3000
+CMD ["yarn", "start"]

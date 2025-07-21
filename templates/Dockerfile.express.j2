@@ -1,10 +1,10 @@
-FROM node:{{ node_version }} as builder
+FROM node:{{ node_version | default("20-alpine") }} as builder
 WORKDIR /app
 RUN apk add --no-cache git
 RUN git clone --depth=1 {{ repo_url }} .
 RUN yarn install --production
 
-FROM node:{{ node_version }}
+FROM node:{{ node_version | default("20-alpine") }}
 WORKDIR /app
 COPY --from=builder /app /app
 EXPOSE 3000

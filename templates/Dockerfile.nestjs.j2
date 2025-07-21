@@ -1,4 +1,4 @@
-FROM node:{{ node_version }}
+FROM node:{{ node_version| default("20-alpine")}}
 WORKDIR /app
 RUN apk add --no-cache git
 RUN git clone --depth=1 {{ repo_url }} .
